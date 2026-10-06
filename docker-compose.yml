@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: authservice
+      POSTGRES_USER: authservice
+      POSTGRES_PASSWORD: authservice_dev
+    ports:
+      - "5435:5432"
+    volumes:
+      - authservice-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authservice -d authservice"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: src/AuthService.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=authservice;Username=authservice;Password=authservice_dev
+      Database__Initialize: "true"
+      Jwt__Issuer: AuthService
+      Jwt__Audience: AuthService.Client
+      Jwt__SigningKey: CHANGE-ME-IN-PRODUCTION-AuthService-Docker-Dev-Signing-Key-2026-0123456789
+      BootstrapAdmin__Enabled: "true"
+      BootstrapAdmin__Email: admin@authservice.local
+      BootstrapAdmin__Password: AuthService_2026!
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  authservice-postgres-data:

@@ -1,0 +1,40 @@
+@baseUrl = http://localhost:8082
+@accessToken = REPLACE_ME
+@refreshToken = REPLACE_ME
+
+### Health
+GET {{baseUrl}}/health
+
+### Register
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "StrongPassword2026!"
+}
+
+### Login bootstrap admin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@authservice.local",
+  "password": "AuthService_2026!"
+}
+
+### Me
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{accessToken}}
+
+### Refresh
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### Admin users
+GET {{baseUrl}}/api/admin/users
+Authorization: Bearer {{accessToken}}

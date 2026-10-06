@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore AuthService.sln
+
+      - name: Build
+        run: >
+          dotnet build AuthService.sln
+          --configuration Release
+          --no-restore
+
+      - name: Run tests with coverage
+        run: >
+          dotnet test
+          --solution AuthService.sln
+          --configuration Release
+          --no-build
+          --results-directory ./TestResults
+          --coverlet
+          --coverlet-output-format cobertura
+          --minimum-expected-tests 1
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore
+
+  security-smoke:
+    name: PostgreSQL Auth Security Smoke Test
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build API container
+        run: docker compose build api
+
+      - name: Start environment
+        run: docker compose up -d postgres api
+
+      - name: Wait for API
+        run: |
+          for i in {1..45}; do
+            if curl --fail --silent http://localhost:8082/health/ready >/dev/null; then
+              echo "API is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker compose ps -a
+          docker compose logs postgres
+          docker compose logs api
+          exit 1
+
+      - name: Verify database migration
+        run: |
+          MIGRATION_COUNT="$(docker compose exec -T postgres \
+            psql -U authservice -d authservice -tAc \
+            'SELECT COUNT(*) FROM "__EFMigrationsHistory" WHERE "MigrationId" LIKE ''%_InitialCreate'';')"
+
+          test "$MIGRATION_COUNT" = "1"
+          echo "Initial EF Core migration verified."
+
+      - name: Run authentication and authorization smoke test
+        run: |
+          ADMIN_LOGIN="$(curl --fail --silent \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@authservice.local","password":"AuthService_2026!"}' \
+            http://localhost:8082/api/auth/login)"
+
+          ADMIN_ACCESS="$(echo "$ADMIN_LOGIN" | jq -r '.accessToken')"
+          ADMIN_REFRESH="$(echo "$ADMIN_LOGIN" | jq -r '.refreshToken')"
+
+          curl --fail --silent \
+            -H "Authorization: Bearer $ADMIN_ACCESS" \
+            http://localhost:8082/api/auth/me >/dev/null
+
+          curl --fail --silent \
+            -H "Authorization: Bearer $ADMIN_ACCESS" \
+            http://localhost:8082/api/admin/users >/dev/null
+
+          USER_REGISTER="$(curl --fail --silent \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci-user@example.test","password":"StrongPassword2026!"}' \
+            http://localhost:8082/api/auth/register)"
+
+          USER_ACCESS="$(echo "$USER_REGISTER" | jq -r '.accessToken')"
+
+          curl --fail --silent \
+            -H "Authorization: Bearer $USER_ACCESS" \
+            http://localhost:8082/api/auth/me >/dev/null
+
+          USER_ADMIN_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $USER_ACCESS" \
+            http://localhost:8082/api/admin/users)"
+          test "$USER_ADMIN_STATUS" = "403"
+
+          ROTATED="$(curl --fail --silent \
+            -H 'Content-Type: application/json' \
+            -d "{\"refreshToken\":\"$ADMIN_REFRESH\"}" \
+            http://localhost:8082/api/auth/refresh)"
+
+          ROTATED_REFRESH="$(echo "$ROTATED" | jq -r '.refreshToken')"
+          test "$ROTATED_REFRESH" != "$ADMIN_REFRESH"
+
+          REUSE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d "{\"refreshToken\":\"$ADMIN_REFRESH\"}" \
+            http://localhost:8082/api/auth/refresh)"
+          test "$REUSE_STATUS" = "401"
+
+          FAMILY_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d "{\"refreshToken\":\"$ROTATED_REFRESH\"}" \
+            http://localhost:8082/api/auth/refresh)"
+          test "$FAMILY_STATUS" = "401"
+
+          echo "Authentication, RBAC, token rotation and reuse protection verified."
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs postgres || true
+          docker compose logs api || true
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v
