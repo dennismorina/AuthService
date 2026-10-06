@@ -82,7 +82,7 @@ jobs:
           docker compose logs api
           exit 1
 
-     - name: Verify database migration
+      - name: Verify database migration
         run: |
           MIGRATION_COUNT="$(docker compose exec -T postgres \
             psql -U authservice -d authservice -tAc \
