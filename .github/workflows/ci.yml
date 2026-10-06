@@ -82,11 +82,11 @@ jobs:
           docker compose logs api
           exit 1
 
-      - name: Verify database migration
+     - name: Verify database migration
         run: |
           MIGRATION_COUNT="$(docker compose exec -T postgres \
             psql -U authservice -d authservice -tAc \
-            'SELECT COUNT(*) FROM "__EFMigrationsHistory" WHERE "MigrationId" LIKE ''%_InitialCreate'';')"
+            "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" LIKE '%_InitialCreate';")"
 
           test "$MIGRATION_COUNT" = "1"
           echo "Initial EF Core migration verified."
